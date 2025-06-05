@@ -11,27 +11,42 @@ from desed_task.dataio.datasets_atst_sed import SEDTransform, ATSTTransform, rea
 from desed_task.utils.scaler import TorchScaler
 from train.local.classes_dict import classes_labels
 
+class ATSTNorm(nn.Module):
+    def __init__(self):
+        super(ATSTNorm, self).__init__()
+        # Audio feature extraction
+        self.amp_to_db = AmplitudeToDB(stype="power", top_db=80)
+        self.scaler = MinMax(min=-79.6482,max=50.6842) # TorchScaler("instance", "minmax", [0, 1])
+
+    def amp2db(self, spec):
+        return self.amp_to_db(spec).clamp(min=-50, max=80)
+
+    def forward(self, spec):
+        spec = self.scaler(self.amp2db(spec))
+        return spec
+
 class ATSTSEDFeatureExtractor(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.sed_feat_extractor = SEDTransform(config["feats"])
+        self.sed_feat_extractor = SEDTransform(config["feature"])
         self.scaler = TorchScaler(
                 "instance",
                 config["scaler"]["normtype"],
                 config["scaler"]["dims"],
             )
         self.atst_feat_extractor = ATSTTransform()
+        self.atst_norm = ATSTNorm() # * 新增的ATSTNorm变换, 源码位于train/local/stage1_trainer.py
     
     def take_log(self, mels):
         amp_to_db = AmplitudeToDB(stype="amplitude")
-        amp_to_db.amin = 1e-5  # amin= 1e-5 as in librosa
-        return amp_to_db(mels).clamp(min=-50, max=80)  # clamp to reproduce old code
+        amp_to_db.amin = 1e-5  
+        return amp_to_db(mels).clamp(min=-50, max=80)  
     
     def forward(self, mixture):
-        mixture = mixture.unsqueeze(0)  # fake batch size
+        mixture = mixture.unsqueeze(0) 
         sed_feats = self.sed_feat_extractor(mixture)
         sed_feats = self.scaler(self.take_log(sed_feats))
-        atst_feats = self.atst_feat_extractor(mixture)
+        atst_feats = self.atst_norm(self.atst_feat_extractor(mixture))# * 新增的ATSTNorm变换
 
         return sed_feats, atst_feats
 
